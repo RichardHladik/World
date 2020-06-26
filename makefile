@@ -3,11 +3,11 @@ C99 = gcc -std=c99
 LINK = g++
 AR = ar
 #DEBUG_FLAG=-g
-CXXFLAGS = -O1 -Wall -fPIC $(DEBUG_FLAG)
+CXXFLAGS = -O1 -Wall -fPIC $(DEBUG_FLAG) -lfftw3
 CFLAGS = $(CXXFLAGS)
 ARFLAGS = -rv
 OUT_DIR = ./build
-OBJS = $(OUT_DIR)/objs/world/cheaptrick.o $(OUT_DIR)/objs/world/common.o $(OUT_DIR)/objs/world/d4c.o $(OUT_DIR)/objs/world/dio.o $(OUT_DIR)/objs/world/fft.o $(OUT_DIR)/objs/world/harvest.o $(OUT_DIR)/objs/world/matlabfunctions.o $(OUT_DIR)/objs/world/stonemask.o $(OUT_DIR)/objs/world/synthesis.o $(OUT_DIR)/objs/world/synthesisrealtime.o
+OBJS = $(OUT_DIR)/objs/world/cheaptrick.o $(OUT_DIR)/objs/world/common.o $(OUT_DIR)/objs/world/d4c.o $(OUT_DIR)/objs/world/dio.o $(OUT_DIR)/objs/world/harvest.o $(OUT_DIR)/objs/world/matlabfunctions.o $(OUT_DIR)/objs/world/stonemask.o $(OUT_DIR)/objs/world/synthesis.o $(OUT_DIR)/objs/world/synthesisrealtime.o
 LIBS =
 MKDIR = mkdir -p $(1)
 ifeq ($(shell echo "check_quotes"),"check_quotes")
