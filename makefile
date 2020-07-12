@@ -3,7 +3,7 @@ C99 = gcc -std=c99
 LINK = g++
 AR = ar
 #DEBUG_FLAG=-g
-CXXFLAGS = -O1 -Wall -fPIC $(DEBUG_FLAG) -lfftw3
+CXXFLAGS = -O2 -Wall -fPIC $(DEBUG_FLAG) -lfftw3
 CFLAGS = $(CXXFLAGS)
 ARFLAGS = -rv
 OUT_DIR = ./build
