@@ -2,12 +2,14 @@
 // Copyright 2012 Masanori Morise
 // Author: mmorise [at] yamanashi.ac.jp (Masanori Morise)
 // Last update: 2019/04/11
+// 2021-05-31: edited by Richard Hladík, sped up FFTW by reducing needless reallocations and plan creation (assuming fft_size is constant)
 //
 // F0 estimation based on DIO (Distributed Inline-filter Operation).
 //-----------------------------------------------------------------------------
 #include "world/dio.h"
 
 #include <math.h>
+#include <iostream>
 
 #include "world/common.h"
 #include "world/constantnumbers.h"
@@ -37,7 +39,11 @@ namespace {
 //-----------------------------------------------------------------------------
 // DesignLowCutFilter() calculates the coefficients the filter.
 //-----------------------------------------------------------------------------
-static void DesignLowCutFilter(int N, int fft_size, double *low_cut_filter) {
+static int fft_size;
+static fft_complex *y_spectrum = nullptr;
+static double *y = nullptr;
+
+static void DesignLowCutFilter(int N, double *low_cut_filter) {
   for (int i = 1; i <= N; ++i)
     low_cut_filter[i - 1] = 0.5 - 0.5 * cos(i * 2.0 * world::kPi / (N + 1));
   for (int i = N; i < fft_size; ++i) low_cut_filter[i] = 0.0;
@@ -58,9 +64,8 @@ static void DesignLowCutFilter(int N, int fft_size, double *low_cut_filter) {
 // and calculates the spectrum of the downsampled signal.
 //-----------------------------------------------------------------------------
 static void GetSpectrumForEstimation(const double *x, int x_length,
-    int y_length, double actual_fs, int fft_size, int decimation_ratio,
-    fft_complex *y_spectrum) {
-  double *y = new double[fft_size];
+    int y_length, double actual_fs, int decimation_ratio) {
+  //static double *y = new double[fft_size];
 
   // Initialization
   for (int i = 0; i < fft_size; ++i) y[i] = 0.0;
@@ -78,19 +83,18 @@ static void GetSpectrumForEstimation(const double *x, int x_length,
   for (int i = 0; i < y_length; ++i) y[i] -= mean_y;
   for (int i = y_length; i < fft_size; ++i) y[i] = 0.0;
 
-  fft_plan forwardFFT =
+  static fft_plan forwardFFT1 =
     fft_plan_dft_r2c_1d(fft_size, y, y_spectrum, FFT_ESTIMATE);
-  fft_execute(forwardFFT);
-  fft_destroy_plan(forwardFFT);
+  fft_execute(forwardFFT1);
 
   // Low cut filtering (from 0.1.4). Cut off frequency is 50.0 Hz.
   int cutoff_in_sample = matlab_round(actual_fs / world::kCutOff);
-  DesignLowCutFilter(cutoff_in_sample * 2 + 1, fft_size, y);
+  DesignLowCutFilter(cutoff_in_sample * 2 + 1, y);
 
-  fft_complex *filter_spectrum = new fft_complex[fft_size];
-  forwardFFT =
+  static fft_complex *filter_spectrum = new fft_complex[fft_size];
+  static fft_plan forwardFFT2 =
     fft_plan_dft_r2c_1d(fft_size, y, filter_spectrum, FFT_ESTIMATE);
-  fft_execute(forwardFFT);
+  fft_execute(forwardFFT2);
 
   double tmp = 0;
   for (int i = 0; i <= fft_size / 2; ++i) {
@@ -101,10 +105,6 @@ static void GetSpectrumForEstimation(const double *x, int x_length,
       y_spectrum[i][1] * filter_spectrum[i][0];
     y_spectrum[i][0] = tmp;
   }
-
-  fft_destroy_plan(forwardFFT);
-  delete[] y;
-  delete[] filter_spectrum;
 }
 
 //-----------------------------------------------------------------------------
@@ -295,17 +295,17 @@ static void FixF0Contour(double frame_period, int number_of_candidates,
 // input signal and low-pass filter.
 // This function is only used in RawEventByDio()
 //-----------------------------------------------------------------------------
-static void GetFilteredSignal(int half_average_length, int fft_size,
-    const fft_complex *y_spectrum, int y_length, double *filtered_signal) {
-  double *low_pass_filter = new double[fft_size];
+static void GetFilteredSignal(int half_average_length,
+    int y_length, double *filtered_signal) {
+  static double *low_pass_filter = new double[fft_size];
   // Nuttall window is used as a low-pass filter.
   // Cutoff frequency depends on the window length.
   NuttallWindow(half_average_length * 4, low_pass_filter);
   for (int i = half_average_length * 4; i < fft_size; ++i)
     low_pass_filter[i] = 0.0;
 
-  fft_complex *low_pass_filter_spectrum = new fft_complex[fft_size];
-  fft_plan forwardFFT = fft_plan_dft_r2c_1d(fft_size, low_pass_filter,
+  static fft_complex *low_pass_filter_spectrum = new fft_complex[fft_size];
+  static fft_plan forwardFFT = fft_plan_dft_r2c_1d(fft_size, low_pass_filter,
       low_pass_filter_spectrum, FFT_ESTIMATE);
   fft_execute(forwardFFT);
 
@@ -329,7 +329,7 @@ static void GetFilteredSignal(int half_average_length, int fft_size,
       low_pass_filter_spectrum[i][1];
   }
 
-  fft_plan inverseFFT = fft_plan_dft_c2r_1d(fft_size,
+  static fft_plan inverseFFT = fft_plan_dft_c2r_1d(fft_size,
     low_pass_filter_spectrum, filtered_signal, FFT_ESTIMATE);
   fft_execute(inverseFFT);
 
@@ -337,11 +337,6 @@ static void GetFilteredSignal(int half_average_length, int fft_size,
   int index_bias = half_average_length * 2;
   for (int i = 0; i < y_length; ++i)
     filtered_signal[i] = filtered_signal[i + index_bias];
-
-  fft_destroy_plan(inverseFFT);
-  fft_destroy_plan(forwardFFT);
-  delete[] low_pass_filter_spectrum;
-  delete[] low_pass_filter;
 }
 
 //-----------------------------------------------------------------------------
@@ -527,11 +522,11 @@ static void DestroyZeroCrossings(ZeroCrossings *zero_crossings) {
 // GetF0CandidateFromRawEvent() calculates F0 candidate contour in 1-ch signal
 //-----------------------------------------------------------------------------
 static void GetF0CandidateFromRawEvent(double boundary_f0, double fs,
-    const fft_complex *y_spectrum, int y_length, int fft_size, double f0_floor,
+    int y_length, double f0_floor,
     double f0_ceil, const double *temporal_positions, int f0_length,
     double *f0_score, double *f0_candidate) {
-  double *filtered_signal = new double[fft_size];
-  GetFilteredSignal(matlab_round(fs / boundary_f0 / 2.0), fft_size, y_spectrum,
+  static double *filtered_signal = new double[fft_size];
+  GetFilteredSignal(matlab_round(fs / boundary_f0 / 2.0),
       y_length, filtered_signal);
 
   ZeroCrossings zero_crossings = {0};
@@ -542,7 +537,6 @@ static void GetF0CandidateFromRawEvent(double boundary_f0, double fs,
       temporal_positions, f0_length, f0_candidate, f0_score);
 
   DestroyZeroCrossings(&zero_crossings);
-  delete[] filtered_signal;
 }
 
 //-----------------------------------------------------------------------------
@@ -551,15 +545,15 @@ static void GetF0CandidateFromRawEvent(double boundary_f0, double fs,
 static void GetF0CandidatesAndScores(const double *boundary_f0_list,
     int number_of_bands, double actual_fs, int y_length,
     const double *temporal_positions, int f0_length,
-    const fft_complex *y_spectrum, int fft_size, double f0_floor,
+    double f0_floor,
     double f0_ceil, double **raw_f0_candidates, double **raw_f0_scores) {
   double *f0_candidate = new double[f0_length];
   double *f0_score = new double[f0_length];
 
   // Calculation of the acoustics events (zero-crossing)
   for (int i = 0; i < number_of_bands; ++i) {
-    GetF0CandidateFromRawEvent(boundary_f0_list[i], actual_fs, y_spectrum,
-        y_length, fft_size, f0_floor, f0_ceil, temporal_positions, f0_length,
+    GetF0CandidateFromRawEvent(boundary_f0_list[i], actual_fs,
+        y_length, f0_floor, f0_ceil, temporal_positions, f0_length,
         f0_score, f0_candidate);
     for (int j = 0; j < f0_length; ++j) {
       // A way to avoid zero division
@@ -591,14 +585,17 @@ static void DioGeneralBody(const double *x, int x_length, int fs,
   int decimation_ratio = MyMaxInt(MyMinInt(speed, 12), 1);
   int y_length = (1 + static_cast<int>(x_length / decimation_ratio));
   double actual_fs = static_cast<double>(fs) / decimation_ratio;
-  int fft_size = GetSuitableFFTSize(y_length +
+  fft_size = GetSuitableFFTSize(y_length +
       matlab_round(actual_fs / world::kCutOff) * 2 + 1 +
       (4 * static_cast<int>(1.0 + actual_fs / boundary_f0_list[0] / 2.0)));
 
   // Calculation of the spectrum used for the f0 estimation
-  fft_complex *y_spectrum = new fft_complex[fft_size];
-  GetSpectrumForEstimation(x, x_length, y_length, actual_fs, fft_size,
-      decimation_ratio, y_spectrum);
+  if (!y_spectrum)
+	  y_spectrum = new fft_complex[fft_size];
+  if (!y)
+	  y = new double[fft_size];
+  GetSpectrumForEstimation(x, x_length, y_length, actual_fs,
+      decimation_ratio);
 
   double **f0_candidates = new double *[number_of_bands];
   double **f0_scores = new double *[number_of_bands];
@@ -612,8 +609,8 @@ static void DioGeneralBody(const double *x, int x_length, int fs,
     temporal_positions[i] = i * frame_period / 1000.0;
 
   GetF0CandidatesAndScores(boundary_f0_list, number_of_bands,
-      actual_fs, y_length, temporal_positions, f0_length, y_spectrum,
-      fft_size, f0_floor, f0_ceil, f0_candidates, f0_scores);
+      actual_fs, y_length, temporal_positions, f0_length,
+      f0_floor, f0_ceil, f0_candidates, f0_scores);
 
   // Selection of the best value based on fundamental-ness.
   // This function is related with SortCandidates() in MATLAB.
@@ -626,7 +623,6 @@ static void DioGeneralBody(const double *x, int x_length, int fs,
       best_f0_contour, f0_length, f0_floor, allowed_range, f0);
 
   delete[] best_f0_contour;
-  delete[] y_spectrum;
   for (int i = 0; i < number_of_bands; ++i) {
     delete[] f0_scores[i];
     delete[] f0_candidates[i];
