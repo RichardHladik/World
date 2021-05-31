@@ -16,6 +16,8 @@
 #include "world/matlabfunctions.h"
 
 namespace {
+static ForwardRealFFT _forward_real_fft = {0};
+static ForwardRealFFT *forward_real_fft = nullptr;
 //-----------------------------------------------------------------------------
 // GetBaseIndex() calculates the temporal positions for windowing.
 // Since the result includes negative value and the value that exceeds the
@@ -60,7 +62,7 @@ static void GetDiffWindow(const double *main_window, int base_time_length,
 //-----------------------------------------------------------------------------
 static void GetSpectra(const double *x, int x_length, int fft_size,
     const int *index_raw, const double *main_window, const double *diff_window,
-    int base_time_length, const ForwardRealFFT *forward_real_fft,
+    int base_time_length,
     fft_complex *main_spectrum, fft_complex *diff_spectrum) {
   int *index = new int[base_time_length];
 
@@ -138,8 +140,10 @@ static double GetMeanF0(const double *x, int x_length, int fs,
     double current_position, double initial_f0, int fft_size,
     double window_length_in_time, const double *base_time,
     int base_time_length) {
-  ForwardRealFFT forward_real_fft = {0};
-  InitializeForwardRealFFT(fft_size, &forward_real_fft);
+  if (forward_real_fft == nullptr) {
+    forward_real_fft = &_forward_real_fft;
+    InitializeForwardRealFFT(fft_size, forward_real_fft);
+  }
   fft_complex *main_spectrum = new fft_complex[fft_size];
   fft_complex *diff_spectrum = new fft_complex[fft_size];
 
@@ -152,7 +156,7 @@ static double GetMeanF0(const double *x, int x_length, int fs,
       window_length_in_time, main_window);
   GetDiffWindow(main_window, base_time_length, diff_window);
   GetSpectra(x, x_length, fft_size, index_raw, main_window, diff_window,
-      base_time_length, &forward_real_fft, main_spectrum, diff_spectrum);
+      base_time_length, main_spectrum, diff_spectrum);
 
   double *power_spectrum = new double[fft_size / 2 + 1];
   double *numerator_i = new double[fft_size / 2 + 1];
@@ -173,7 +177,7 @@ static double GetMeanF0(const double *x, int x_length, int fs,
   delete[] numerator_i;
   delete[] power_spectrum;
   delete[] main_spectrum;
-  DestroyForwardRealFFT(&forward_real_fft);
+  //DestroyForwardRealFFT(&forward_real_fft);
 
   return tentative_f0;
 }

@@ -237,41 +237,69 @@ void interp1Q(double x, double shift, const double *y, int x_length,
   delete[] delta_y;
 }
 
-// You must not use these variables.
-// Note:
-// I have no idea to implement the randn() and randn_reseed() without the
-// global variables. If you have a good idea, please give me the information.
-static uint32_t g_randn_x = 123456789;
-static uint32_t g_randn_y = 362436069;
-static uint32_t g_randn_z = 521288629;
-static uint32_t g_randn_w = 88675123;
+// From https://lemire.me/blog/2019/03/19/the-fastest-conventional-random-number-generator-that-can-pass-big-crush/
+/*
+uint64_t wyhash64_x = 0; 
+uint64_t wyhash64() {
+  wyhash64_x += 0x60bee2bee120fc15;
+  __uint128_t tmp;
+  tmp = (__uint128_t) wyhash64_x * 0xa3b195354a39b70d;
+  uint64_t m1 = (tmp >> 64) ^ tmp;
+  tmp = (__uint128_t)m1 * 0x1b03738712fad5c9;
+  uint64_t m2 = (tmp >> 64) ^ tmp;
+  return m2;
+}
 
 void randn_reseed() {
-    g_randn_x = 123456789;
-    g_randn_y = 362436069;
-    g_randn_z = 521288629;
-    g_randn_w = 88675123;
+	wyhash64_x = 0;
 }
 
 double randn(void) {
-  uint32_t t;
-  t = g_randn_x ^ (g_randn_x << 11);
-  g_randn_x = g_randn_y;
-  g_randn_y = g_randn_z;
-  g_randn_z = g_randn_w;
-  g_randn_w = (g_randn_w ^ (g_randn_w >> 19)) ^ (t ^ (t >> 8));
-
-  uint32_t tmp = g_randn_w >> 4;
-  for (int i = 0; i < 11; ++i) {
-    t = g_randn_x ^ (g_randn_x << 11);
-    g_randn_x = g_randn_y;
-    g_randn_y = g_randn_z;
-    g_randn_z = g_randn_w;
-    g_randn_w = (g_randn_w ^ (g_randn_w >> 19)) ^ (t ^ (t >> 8));
-    tmp += g_randn_w >> 4;
+  uint32_t tmp = 0;
+  for (int i = 0; i < 6; ++i) {
+	auto r = wyhash64();
+	auto a = r >> 32, b = r & 0xFFFFFFFF;
+    tmp += a >> 4;
+    tmp += b >> 4;
   }
   return tmp / 268435456.0 - 6.0;
+} 
+*/
+
+
+static __uint128_t g_lehmer64_state1 = 123;
+inline unsigned long long lehmer64_1() {
+  g_lehmer64_state1 *= 0xda942042e4dd58b5ull;
+  return g_lehmer64_state1 >> 64;
 }
+static __uint128_t g_lehmer64_state2 = 456;
+inline unsigned long long lehmer64_2() {
+  g_lehmer64_state2 *= 0xda942042e4dd58b5ull;
+  return g_lehmer64_state2 >> 64;
+}
+static __uint128_t g_lehmer64_state3 = 789;
+inline unsigned long long lehmer64_3() {
+  g_lehmer64_state3 *= 0xda942042e4dd58b5ull;
+  return g_lehmer64_state3 >> 64;
+}
+
+void randn_reseed() {
+	g_lehmer64_state1 = 1234;
+	g_lehmer64_state2 = 424242;
+	g_lehmer64_state3 = 9874323476;
+}
+
+double randn(void) {
+  uint64_t tmp = 0;
+  for (int i = 0; i < 2; ++i) {
+	auto a = lehmer64_1() & 0x0FFFFFFF0FFFFFFF,
+		 b = lehmer64_2() & 0x0FFFFFFF0FFFFFFF,
+		 c = lehmer64_3() & 0x0FFFFFFF0FFFFFFF;
+	tmp += a + b + c;
+  }
+  tmp = (tmp >> 32) + (tmp & 0xFFFFFFFF);
+  return tmp / 268435456.0 - 6.0;
+} 
 
 void fast_fftfilt(const double *x, int x_length, const double *h, int h_length,
     int fft_size, const ForwardRealFFT *forward_real_fft,
