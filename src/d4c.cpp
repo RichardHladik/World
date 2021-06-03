@@ -345,8 +345,12 @@ void D4C(const double *x, int x_length, int fs,
     static_cast<int>(log(4.0 * fs / world::kFloorF0D4C + 1) /
       world::kLog2)));
 
-  ForwardRealFFT forward_real_fft = {0};
-  InitializeForwardRealFFT(fft_size_d4c, &forward_real_fft);
+  static ForwardRealFFT _forward_real_fft = {0};
+  static ForwardRealFFT *forward_real_fft = nullptr;
+  if (forward_real_fft == nullptr) {
+    forward_real_fft = &_forward_real_fft;
+    InitializeForwardRealFFT(fft_size_d4c, forward_real_fft);
+  }
 
   int number_of_aperiodicities =
     static_cast<int>(MyMinDouble(world::kUpperLimit, fs / 2.0 -
@@ -380,7 +384,7 @@ void D4C(const double *x, int x_length, int fs,
     if (f0[i] == 0 || aperiodicity0[i] <= option->threshold) continue;
     D4CGeneralBody(x, x_length, fs, MyMaxDouble(world::kFloorF0D4C, f0[i]),
         fft_size_d4c, temporal_positions[i], number_of_aperiodicities, window,
-        window_length, &forward_real_fft, &coarse_aperiodicity[1]);
+        window_length, forward_real_fft, &coarse_aperiodicity[1]);
 
     // Linear interpolation to convert the coarse aperiodicity into its
     // spectral representation.
@@ -388,7 +392,6 @@ void D4C(const double *x, int x_length, int fs,
         number_of_aperiodicities, frequency_axis, fft_size, aperiodicity[i]);
   }
 
-  DestroyForwardRealFFT(&forward_real_fft);
   delete[] aperiodicity0;
   delete[] coarse_frequency_axis;
   delete[] coarse_aperiodicity;
