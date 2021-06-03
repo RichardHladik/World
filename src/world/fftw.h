@@ -17,7 +17,7 @@ WORLD_BEGIN_C_DECLS
 // Commands for FFT (This is the same as FFTW)
 #define FFT_FORWARD FFTW_FORWARD
 #define FFT_BACKWARD FFTW_BACKWARD
-#define FFT_ESTIMATE FFTW_MEASURE
+#define FFT_ESTIMATE FFTW_EXHAUSTIVE
 #define fft_complex fftw_complex
 #define fft_plan fftw_plan
 
