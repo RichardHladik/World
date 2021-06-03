@@ -35,6 +35,10 @@ typedef struct {
 } ZeroCrossings;
 
 namespace {
+int fft_size_max = 0;
+constexpr int log_fft_size(int x) {
+  return __builtin_popcount(x - 1);
+}
 //-----------------------------------------------------------------------------
 // Since the waveform of beginning and ending after decimate include noise,
 // the input waveform is extended. This is the processing for the
@@ -85,11 +89,9 @@ static void GetWaveformAndSpectrum(const double *x, int x_length,
   for (int i = 0; i < y_length; ++i) y[i] -= mean_y;
   for (int i = y_length; i < fft_size; ++i) y[i] = 0.0;
 
-  fft_plan forwardFFT =
+  static fft_plan forwardFFT =
     fft_plan_dft_r2c_1d(fft_size, y, y_spectrum, FFT_ESTIMATE);
   fft_execute(forwardFFT);
-
-  fft_destroy_plan(forwardFFT);
 }
 
 //-----------------------------------------------------------------------------
@@ -99,7 +101,7 @@ static void GetWaveformAndSpectrum(const double *x, int x_length,
 static void GetFilteredSignal(double boundary_f0, int fft_size, double fs,
     const fft_complex *y_spectrum, int y_length, double *filtered_signal) {
   int filter_length_half = matlab_round(fs / boundary_f0 * 2.0);
-  double *band_pass_filter = new double[fft_size];
+  static double *band_pass_filter = new double[fft_size];
   NuttallWindow(filter_length_half * 2 + 1, band_pass_filter);
   for (int i = -filter_length_half; i <= filter_length_half; ++i)
     band_pass_filter[i + filter_length_half] *=
@@ -107,8 +109,8 @@ static void GetFilteredSignal(double boundary_f0, int fft_size, double fs,
   for (int i = filter_length_half * 2 + 1; i < fft_size; ++i)
     band_pass_filter[i] = 0.0;
 
-  fft_complex *band_pass_filter_spectrum = new fft_complex[fft_size];
-  fft_plan forwardFFT = fft_plan_dft_r2c_1d(fft_size, band_pass_filter,
+  static fft_complex *band_pass_filter_spectrum = new fft_complex[fft_size];
+  static fft_plan forwardFFT = fft_plan_dft_r2c_1d(fft_size, band_pass_filter,
     band_pass_filter_spectrum, FFT_ESTIMATE);
   fft_execute(forwardFFT);
 
@@ -132,7 +134,7 @@ static void GetFilteredSignal(double boundary_f0, int fft_size, double fs,
       band_pass_filter_spectrum[i][1];
   }
 
-  fft_plan inverseFFT = fft_plan_dft_c2r_1d(fft_size,
+  static fft_plan inverseFFT = fft_plan_dft_c2r_1d(fft_size,
     band_pass_filter_spectrum, filtered_signal, FFT_ESTIMATE);
   fft_execute(inverseFFT);
 
@@ -140,11 +142,6 @@ static void GetFilteredSignal(double boundary_f0, int fft_size, double fs,
   int index_bias = filter_length_half + 1;
   for (int i = 0; i < y_length; ++i)
     filtered_signal[i] = filtered_signal[i + index_bias];
-
-  fft_destroy_plan(inverseFFT);
-  fft_destroy_plan(forwardFFT);
-  delete[] band_pass_filter_spectrum;
-  delete[] band_pass_filter;
 }
 
 //-----------------------------------------------------------------------------
@@ -313,7 +310,7 @@ static void GetF0CandidateFromRawEvent(double boundary_f0, double fs,
     const fft_complex *y_spectrum, int y_length, int fft_size, double f0_floor,
     double f0_ceil, const double *temporal_positions, int f0_length,
     double *f0_candidate) {
-  double *filtered_signal = new double[fft_size];
+  static double *filtered_signal = new double[fft_size];
   GetFilteredSignal(boundary_f0, fft_size, fs, y_spectrum,
       y_length, filtered_signal);
 
@@ -325,7 +322,6 @@ static void GetF0CandidateFromRawEvent(double boundary_f0, double fs,
       temporal_positions, f0_length, f0_candidate);
 
   DestroyZeroCrossings(&zero_crossings);
-  delete[] filtered_signal;
 }
 
 //-----------------------------------------------------------------------------
@@ -471,7 +467,7 @@ static void GetDiffWindow(const double *main_window, int base_time_length,
 // GetSpectra() calculates two spectra of the waveform windowed by windows
 // (main window and diff window).
 //-----------------------------------------------------------------------------
-static void GetSpectra(const double *x, int x_length, int fft_size,
+static void GetSpectra(const double *x, int x_length, int fft_size_smaller,
     const int *base_index, const double *main_window,
     const double *diff_window, int base_time_length,
     const ForwardRealFFT *forward_real_fft, fft_complex *main_spectrum,
@@ -482,21 +478,21 @@ static void GetSpectra(const double *x, int x_length, int fft_size,
     safe_index[i] = MyMaxInt(0, MyMinInt(x_length - 1, base_index[i] - 1));
   for (int i = 0; i < base_time_length; ++i)
     forward_real_fft->waveform[i] = x[safe_index[i]] * main_window[i];
-  for (int i = base_time_length; i < fft_size; ++i)
+  for (int i = base_time_length; i < fft_size_smaller; ++i)
     forward_real_fft->waveform[i] = 0.0;
 
   fft_execute(forward_real_fft->forward_fft);
-  for (int i = 0; i <= fft_size / 2; ++i) {
+  for (int i = 0; i <= fft_size_smaller / 2; ++i) {
     main_spectrum[i][0] = forward_real_fft->spectrum[i][0];
     main_spectrum[i][1] = forward_real_fft->spectrum[i][1];
   }
 
   for (int i = 0; i < base_time_length; ++i)
     forward_real_fft->waveform[i] = x[safe_index[i]] * diff_window[i];
-  for (int i = base_time_length; i < fft_size; ++i)
+  for (int i = base_time_length; i < fft_size_smaller; ++i)
     forward_real_fft->waveform[i] = 0.0;
   fft_execute(forward_real_fft->forward_fft);
-  for (int i = 0; i <= fft_size / 2; ++i) {
+  for (int i = 0; i <= fft_size_smaller / 2; ++i) {
     diff_spectrum[i][0] = forward_real_fft->spectrum[i][0];
     diff_spectrum[i][1] = forward_real_fft->spectrum[i][1];
   }
@@ -505,16 +501,16 @@ static void GetSpectra(const double *x, int x_length, int fft_size,
 }
 
 static void FixF0(const double *power_spectrum, const double *numerator_i,
-    int fft_size, double fs, double current_f0, int number_of_harmonics,
+    int fft_size_smaller, double fs, double current_f0, int number_of_harmonics,
     double *refined_f0, double *score) {
   double *amplitude_list = new double[number_of_harmonics];
   double *instantaneous_frequency_list = new double[number_of_harmonics];
 
   int index;
   for (int i = 0; i < number_of_harmonics; ++i) {
-    index = matlab_round(current_f0 * fft_size / fs * (i + 1));
+    index = matlab_round(current_f0 * fft_size_smaller / fs * (i + 1));
     instantaneous_frequency_list[i] = power_spectrum[index] == 0.0 ? 0.0 :
-      static_cast<double>(index) * fs / fft_size +
+      static_cast<double>(index) * fs / fft_size_smaller +
       numerator_i[index] / power_spectrum[index] * fs / 2.0 / world::kPi;
     amplitude_list[i] = sqrt(power_spectrum[index]);
   }
@@ -539,13 +535,17 @@ static void FixF0(const double *power_spectrum, const double *numerator_i,
 // GetMeanF0() calculates the instantaneous frequency.
 //-----------------------------------------------------------------------------
 static void GetMeanF0(const double *x, int x_length, double fs,
-    double current_position, double current_f0, int fft_size,
+    double current_position, double current_f0, int fft_size_smaller,
     double window_length_in_time, const double *base_time,
     int base_time_length, double *refined_f0, double *refined_score) {
-  ForwardRealFFT forward_real_fft = { 0 };
-  InitializeForwardRealFFT(fft_size, &forward_real_fft);
-  fft_complex *main_spectrum = new fft_complex[fft_size];
-  fft_complex *diff_spectrum = new fft_complex[fft_size];
+  static ForwardRealFFT forward_real_ffts[20] = { 0 };
+  static fft_complex *main_spectrum = new fft_complex[fft_size_max];
+  static fft_complex *diff_spectrum = new fft_complex[fft_size_max];
+
+  int ix = log_fft_size(fft_size_smaller);
+  ForwardRealFFT &forward_real_fft = forward_real_ffts[ix];
+  if (forward_real_fft.fft_size == 0)
+    InitializeForwardRealFFT(fft_size_smaller, &forward_real_ffts[ix]);
 
   int *base_index = new int[base_time_length];
   double *main_window = new double[base_time_length];
@@ -556,12 +556,12 @@ static void GetMeanF0(const double *x, int x_length, double fs,
       window_length_in_time, main_window);
   GetDiffWindow(main_window, base_time_length, diff_window);
 
-  GetSpectra(x, x_length, fft_size, base_index, main_window, diff_window,
+  GetSpectra(x, x_length, fft_size_smaller, base_index, main_window, diff_window,
       base_time_length, &forward_real_fft, main_spectrum, diff_spectrum);
 
-  double *power_spectrum = new double[fft_size / 2 + 1];
-  double *numerator_i = new double[fft_size / 2 + 1];
-  for (int j = 0; j <= fft_size / 2; ++j) {
+  double *power_spectrum = new double[fft_size_smaller / 2 + 1];
+  double *numerator_i = new double[fft_size_smaller / 2 + 1];
+  for (int j = 0; j <= fft_size_smaller / 2; ++j) {
     numerator_i[j] = main_spectrum[j][0] * diff_spectrum[j][1] -
       main_spectrum[j][1] * diff_spectrum[j][0];
     power_spectrum[j] = main_spectrum[j][0] * main_spectrum[j][0] +
@@ -570,17 +570,14 @@ static void GetMeanF0(const double *x, int x_length, double fs,
 
   int number_of_harmonics =
     MyMinInt(static_cast<int>(fs / 2.0 / current_f0), 6);
-  FixF0(power_spectrum, numerator_i, fft_size, fs, current_f0,
+  FixF0(power_spectrum, numerator_i, fft_size_smaller, fs, current_f0,
       number_of_harmonics, refined_f0, refined_score);
 
-  delete[] diff_spectrum;
   delete[] diff_window;
   delete[] main_window;
   delete[] base_index;
   delete[] numerator_i;
   delete[] power_spectrum;
-  delete[] main_spectrum;
-  DestroyForwardRealFFT(&forward_real_fft);
 }
 
 //-----------------------------------------------------------------------------
@@ -600,10 +597,10 @@ static void GetRefinedF0(const double *x, int x_length, double fs,
   double *base_time = new double[half_window_length * 2 + 1];
   for (int i = 0; i < half_window_length * 2 + 1; i++)
     base_time[i] = (-half_window_length + i) / fs;
-  int fft_size = static_cast<int>(pow(2.0, 2.0 +
+  int fft_size_smaller = static_cast<int>(pow(2.0, 2.0 +
     static_cast<int>(log(half_window_length * 2.0 + 1.0) / world::kLog2)));
 
-  GetMeanF0(x, x_length, fs, current_position, current_f0, fft_size,
+  GetMeanF0(x, x_length, fs, current_position, current_f0, fft_size_smaller,
       window_length_in_time, base_time, half_window_length * 2 + 1,
       refined_f0, refined_score);
 
@@ -1163,10 +1160,11 @@ static void HarvestGeneralBody(const double *x, int x_length, int fs,
   double actual_fs = static_cast<double>(fs) / decimation_ratio;
   int fft_size = GetSuitableFFTSize(y_length + 5 +
     2 * static_cast<int>(2.0 * actual_fs / boundary_f0_list[0]));
+  fft_size_max = fft_size;
 
   // Calculation of the spectrum used for the f0 estimation
-  double *y = new double[fft_size];
-  fft_complex *y_spectrum = new fft_complex[fft_size];
+  static double *y = new double[fft_size];
+  static fft_complex *y_spectrum = new fft_complex[fft_size];
   GetWaveformAndSpectrum(x, x_length, y_length, actual_fs, fft_size,
       decimation_ratio, y, y_spectrum);
 
@@ -1202,9 +1200,7 @@ static void HarvestGeneralBody(const double *x, int x_length, int fs,
       number_of_candidates, best_f0_contour);
   SmoothF0Contour(best_f0_contour, f0_length, f0);
 
-  delete[] y;
   delete[] best_f0_contour;
-  delete[] y_spectrum;
   for (int i = 0; i < f0_length; ++i) {
     delete[] f0_candidates[i];
     delete[] f0_candidates_score[i];
